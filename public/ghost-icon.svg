@@ -1,0 +1,56 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 270" width="100%" height="100%">
+  <!-- SIM Card Outline with Top-Right Cut -->
+  <path
+    d="M 52 24
+       L 138 24
+       Q 144 24 148 28
+       L 168 48
+       Q 172 52 172 58
+       L 172 200
+       A 16 16 0 0 1 156 216
+       L 44 216
+       A 16 16 0 0 1 28 200
+       L 28 40
+       A 16 16 0 0 1 44 24
+       Z"
+    fill="none"
+    stroke="#FFFFFF"
+    stroke-width="4.5"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+  />
+
+  <!-- Ghost Minimal Silhouette Shape -->
+  <!-- Starts at bottom left tail, goes up left side, arches over head, swoops down right side, flowing wave base -->
+  <path
+    d="M 68 174
+       L 68 112
+       C 68 82 81 68 100 68
+       C 119 68 132 82 132 112
+       C 132 138 136 162 152 176
+       C 140 178 126 172 114 162
+       C 100 150 86 150 78 158
+       C 72 164 68 170 68 174
+       Z"
+    fill="none"
+    stroke="#FFFFFF"
+    stroke-width="4"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+  />
+
+  <!-- Status Indicator Dot -->
+  <circle cx="100" cy="198" r="4.5" fill="#00FF88" />
+
+  <!-- GHOST Typographic Label -->
+  <text
+    x="100"
+    y="256"
+    text-anchor="middle"
+    fill="#FFFFFF"
+    font-family="'Space Grotesk', -apple-system, sans-serif"
+    font-size="19"
+    font-weight="400"
+    letter-spacing="9"
+  >GHOST</text>
+</svg>

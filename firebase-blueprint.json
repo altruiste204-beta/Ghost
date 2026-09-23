@@ -1,0 +1,39 @@
+{
+  "entities": {
+    "GhostPublic": {
+      "title": "Ghost Public Data",
+      "description": "Publicly accessible routing information for a GHOST.",
+      "type": "object",
+      "properties": {
+        "pseudo": { "type": "string", "pattern": "^[a-z0-9_-]{3,30}$" },
+        "currentNumber": { "type": "string", "maxLength": 30 },
+        "countryCode": { "type": "string", "maxLength": 10 },
+        "nationalNumber": { "type": "string", "maxLength": 20 },
+        "isOnline": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["pseudo", "currentNumber", "countryCode", "nationalNumber", "isOnline", "createdAt", "updatedAt"]
+    },
+    "GhostPrivate": {
+      "title": "Ghost Private Data",
+      "description": "Sensitive owner information for a GHOST.",
+      "type": "object",
+      "properties": {
+        "ownerUid": { "type": "string", "maxLength": 128 },
+        "ownerEmail": { "type": "string", "format": "email", "maxLength": 255 }
+      },
+      "required": ["ownerUid"]
+    }
+  },
+  "firestore": {
+    "ghosts/{pseudo}": {
+      "schema": "GhostPublic",
+      "description": "Public ghost documents."
+    },
+    "ghost_metadata/{pseudo}": {
+      "schema": "GhostPrivate",
+      "description": "Private owner metadata for each ghost."
+    }
+  }
+}

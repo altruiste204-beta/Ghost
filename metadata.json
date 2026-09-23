@@ -1,0 +1,6 @@
+{
+  "name": "GHOST v2 — Change ton numéro. Pas ton lien.",
+  "description": "Un lien permanent permettant de retrouver le numéro de téléphone actuel d'une personne. Temps réel, multi-device et offline-first.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
