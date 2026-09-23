@@ -10,6 +10,7 @@
         "countryCode": { "type": "string", "maxLength": 10 },
         "nationalNumber": { "type": "string", "maxLength": 20 },
         "isOnline": { "type": "boolean" },
+        "localUid": { "type": "string", "maxLength": 128 },
         "createdAt": { "type": "string", "format": "date-time" },
         "updatedAt": { "type": "string", "format": "date-time" }
       },

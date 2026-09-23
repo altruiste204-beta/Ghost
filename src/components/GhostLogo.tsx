@@ -26,7 +26,7 @@ export const GhostLogo: React.FC<GhostLogoProps> = ({
   const dim = sizeMap[size] || sizeMap.md;
 
   const isRed = status === 'offline' || status === 'error';
-  const strokeColor = isRed ? '#FF3B3B' : '#FFFFFF';
+  const strokeColor = isRed ? '#FF3B3B' : '#00FF88';
   const dotColor = isRed ? '#FF3B3B' : status === 'neutral' ? '#666666' : '#00FF88';
   const dotGlow = isRed ? 'rgba(255, 59, 59, 0.7)' : 'rgba(0, 255, 136, 0.8)';
 
@@ -102,7 +102,7 @@ export const GhostLogo: React.FC<GhostLogoProps> = ({
       {/* Optional Wordmark */}
       {showWordmark && (
         <span
-          className="font-display font-light text-white uppercase text-center mt-2"
+          className="font-display font-light text-[#00FF88] uppercase text-center mt-2"
           style={{
             fontSize: `${dim.font}px`,
             letterSpacing: dim.tracking,

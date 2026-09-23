@@ -2,19 +2,15 @@ import React, { createContext, useContext, useEffect, useState } from 'react';
 import { 
   type User, 
   onAuthStateChanged, 
-  signInAnonymously, 
-  signInWithPopup, 
-  linkWithPopup 
+  signInAnonymously 
 } from 'firebase/auth';
-import { auth, googleProvider } from '../lib/firebase';
+import { auth } from '../lib/firebase';
 
 interface AuthContextType {
   user: User | null;
   loading: boolean;
   isAnonymous: boolean;
   loginAnonymously: () => Promise<User>;
-  loginWithGoogle: () => Promise<User>;
-  linkGoogleAccount: () => Promise<void>;
   signOut: () => Promise<void>;
 }
 
@@ -38,18 +34,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     return cred.user;
   };
 
-  const loginWithGoogle = async (): Promise<User> => {
-    const cred = await signInWithPopup(auth, googleProvider);
-    return cred.user;
-  };
-
-  const linkGoogleAccount = async (): Promise<void> => {
-    if (!auth.currentUser) {
-      throw new Error('Aucun utilisateur connecté.');
-    }
-    await linkWithPopup(auth.currentUser, googleProvider);
-  };
-
   const signOut = async (): Promise<void> => {
     await auth.signOut();
   };
@@ -61,8 +45,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         loading,
         isAnonymous: user?.isAnonymous ?? false,
         loginAnonymously,
-        loginWithGoogle,
-        linkGoogleAccount,
         signOut,
       }}
     >

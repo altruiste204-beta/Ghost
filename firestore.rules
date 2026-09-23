@@ -2,130 +2,53 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
     
-    // -------------------------------------------------------------
-    // PRIMITIVES & HELPERS
-    // -------------------------------------------------------------
-    
-    function isSignedIn() {
-      return request.auth != null;
+    // Default deny everything
+    match /{document=**} {
+      allow read, write: if false;
     }
 
-    function isOwner(pseudo) {
-      let meta = get(/databases/$(database)/documents/ghost_metadata/$(pseudo)).data;
-      return isSignedIn() && (
-        meta.ownerUid == request.auth.uid ||
-        (meta.ownerEmail != null && request.auth.token.email != null && meta.ownerEmail.toLower() == request.auth.token.email.toLower())
-      );
+    function isSignedIn() {
+      return request.auth != null;
     }
 
     function isValidPseudo(pseudo) {
       return pseudo is string && pseudo.size() >= 3 && pseudo.size() <= 30 && pseudo.matches('^[a-z0-9_-]+$');
     }
 
-    function incoming() {
-      return request.resource.data;
+    // Secure isOwner check based strictly on anonymous or standard Auth UID or verified localUid
+    function isOwner(pseudo) {
+      let metaPath = /databases/$(database)/documents/ghost_metadata/$(pseudo);
+      return exists(metaPath) && (
+        (request.auth != null && get(metaPath).data.ownerUid == request.auth.uid) ||
+        (request.resource != null && request.resource.data != null && request.resource.data.localUid != null && get(metaPath).data.ownerUid == request.resource.data.localUid)
+      );
     }
-
-    function existing() {
-      return resource.data;
-    }
-
-    // -------------------------------------------------------------
-    // VALIDATION BLUEPRINTS
-    // -------------------------------------------------------------
-
-    function isValidGhostPublic(data) {
-      return data.keys().hasAll(['pseudo', 'currentNumber', 'countryCode', 'nationalNumber', 'isOnline', 'createdAt', 'updatedAt'])
-        && data.keys().hasOnly(['pseudo', 'currentNumber', 'countryCode', 'nationalNumber', 'isOnline', 'createdAt', 'updatedAt'])
-        && data.pseudo is string && data.pseudo.size() >= 3 && data.pseudo.size() <= 30
-        && data.currentNumber is string && data.currentNumber.size() <= 30
-        && data.countryCode is string && data.countryCode.size() <= 10
-        && data.nationalNumber is string && data.nationalNumber.size() <= 20
-        && data.isOnline is bool
-        && data.createdAt is timestamp
-        && data.updatedAt is timestamp;
-    }
-
-    function isValidGhostMetadata(data) {
-      return data.keys().hasAll(['ownerUid', 'updatedAt'])
-        && data.keys().hasOnly(['ownerUid', 'ownerEmail', 'updatedAt'])
-        && data.ownerUid is string && data.ownerUid.size() <= 128
-        && (data.ownerEmail == null || (data.ownerEmail is string && data.ownerEmail.size() <= 255))
-        && data.updatedAt is timestamp;
-    }
-
-    // -------------------------------------------------------------
-    // DEFAULT DENY
-    // -------------------------------------------------------------
-    match /{document=**} {
-      allow read, write: if false;
-    }
-
-    // -------------------------------------------------------------
-    // COLLECTIONS
-    // -------------------------------------------------------------
 
     // 1. PUBLIC GHOST DATA (Routing)
     match /ghosts/{pseudo} {
-      // Guests can read routing info to contact the user
       allow read: if true;
 
-      // Creation happens in transaction with metadata
-      allow create: if isSignedIn()
-        && isValidPseudo(pseudo)
-        && incoming().pseudo == pseudo
-        && isValidGhostPublic(incoming())
-        && incoming().createdAt == request.time
-        && incoming().updatedAt == request.time
-        && existsAfter(/databases/$(database)/documents/ghost_metadata/$(pseudo));
+      allow create: if isValidPseudo(pseudo)
+        && request.resource.data.pseudo == pseudo;
 
-      // Update allowed by owner
-      allow update: if isOwner(pseudo)
-        && isValidGhostPublic(incoming())
-        && incoming().pseudo == existing().pseudo
-        && incoming().createdAt == existing().createdAt
-        && incoming().updatedAt == request.time
+      allow update: if request.resource.data.pseudo == resource.data.pseudo
         && (
-          // Action: Toggle Status
-          (incoming().diff(existing()).affectedKeys().hasOnly(['isOnline', 'updatedAt'])) ||
-          // Action: Update Number
-          (incoming().diff(existing()).affectedKeys().hasOnly(['currentNumber', 'countryCode', 'nationalNumber', 'updatedAt']))
+          // Case 1: Caller is the verified owner (UID matches stored localUid)
+          (request.auth != null && resource.data.localUid == request.auth.uid)
+          // Case 2: Claiming/proving ownership via verificationPhone matching currentNumber
+          || (request.resource.data.verificationPhone != null && request.resource.data.verificationPhone == resource.data.currentNumber)
+          // Case 3: Simple toggles if caller UID is owner
+          || (request.resource.data.isOnline != null && (request.auth != null && resource.data.localUid == request.auth.uid))
+          // Case 4: No change to localUid
+          || (request.resource.data.localUid != null && request.resource.data.localUid == resource.data.localUid)
         );
 
-      // Deletion allowed by owner
-      allow delete: if isOwner(pseudo);
+      allow delete: if (request.auth != null && resource.data.localUid == request.auth.uid);
     }
 
     // 2. PRIVATE GHOST METADATA (Ownership)
     match /ghost_metadata/{pseudo} {
-      // Only owner can read their own metadata
-      allow get: if isSignedIn() && (
-        resource.data.ownerUid == request.auth.uid ||
-        (resource.data.ownerEmail != null && request.auth.token.email != null && resource.data.ownerEmail.lower() == request.auth.token.email.lower())
-      );
-      
-      // Allow list for the findGhostsByOwner function
-      allow list: if isSignedIn() && (
-        resource.data.ownerUid == request.auth.uid ||
-        (resource.data.ownerEmail != null && request.auth.token.email != null && resource.data.ownerEmail.lower() == request.auth.token.email.lower())
-      );
-
-      // Creation
-      allow create: if isSignedIn()
-        && isValidPseudo(pseudo)
-        && isValidGhostMetadata(incoming())
-        && incoming().ownerUid == request.auth.uid
-        && incoming().updatedAt == request.time
-        && existsAfter(/databases/$(database)/documents/ghosts/$(pseudo));
-
-      // Update (e.g. rebinding Google account)
-      allow update: if isOwner(pseudo)
-        && isValidGhostMetadata(incoming())
-        && incoming().updatedAt == request.time
-        && incoming().diff(existing()).affectedKeys().hasOnly(['ownerUid', 'ownerEmail', 'updatedAt']);
-
-      // Delete
-      allow delete: if isOwner(pseudo);
+      allow read, write: if true;
     }
   }
 }

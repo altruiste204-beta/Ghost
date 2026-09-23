@@ -14,7 +14,7 @@
        A 16 16 0 0 1 44 24
        Z"
     fill="none"
-    stroke="#FFFFFF"
+    stroke="#00FF88"
     stroke-width="4.5"
     stroke-linecap="round"
     stroke-linejoin="round"
@@ -33,7 +33,7 @@
        C 72 164 68 170 68 174
        Z"
     fill="none"
-    stroke="#FFFFFF"
+    stroke="#00FF88"
     stroke-width="4"
     stroke-linecap="round"
     stroke-linejoin="round"
@@ -47,7 +47,7 @@
     x="100"
     y="256"
     text-anchor="middle"
-    fill="#FFFFFF"
+    fill="#00FF88"
     font-family="'Space Grotesk', -apple-system, sans-serif"
     font-size="19"
     font-weight="400"

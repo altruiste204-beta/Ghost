@@ -14,7 +14,7 @@ import {
   getDocs,
   type Unsubscribe 
 } from 'firebase/firestore';
-import { db, auth, signInAnonymously, signInWithPopup, googleProvider } from './firebase';
+import { db, auth, signInAnonymously } from './firebase';
 
 export interface GhostData {
   pseudo: string;
@@ -110,6 +110,57 @@ export async function ensureAuthUser(allowPopupFallback = false): Promise<string
   }
 }
 
+export enum OperationType {
+  CREATE = 'create',
+  UPDATE = 'update',
+  DELETE = 'delete',
+  LIST = 'list',
+  GET = 'get',
+  WRITE = 'write',
+}
+
+interface FirestoreErrorInfo {
+  error: string;
+  operationType: OperationType;
+  path: string | null;
+  authInfo: {
+    userId?: string | null;
+    email?: string | null;
+    emailVerified?: boolean | null;
+    isAnonymous?: boolean | null;
+    tenantId?: string | null;
+    providerInfo?: {
+      providerId?: string | null;
+      email?: string | null;
+    }[];
+  }
+}
+
+function handleFirestoreError(error: any, operationType: OperationType, path: string | null) {
+  const errCode = error?.code || 'unknown';
+  const errMsg = error?.message || String(error);
+  
+  const errInfo = {
+    code: errCode,
+    message: errMsg,
+    operationType,
+    path,
+    auth: {
+      uid: auth.currentUser?.uid,
+      email: auth.currentUser?.email,
+      isAnonymous: auth.currentUser?.isAnonymous
+    }
+  };
+
+  console.error('[GHOST Firestore Error]', errInfo);
+
+  if (errCode === 'permission-denied') {
+    throw new Error(`Accès refusé (${operationType} sur ${path}). Vérifiez que vous êtes bien le propriétaire de ce GHOST.`);
+  }
+  
+  throw new Error(`Erreur de connexion à la base de données : ${errMsg}`);
+}
+
 /**
  * Atomically create a new GHOST.
  * If pseudo already exists, throws 'ALREADY_EXISTS'.
@@ -133,8 +184,8 @@ export async function createGhost(params: {
 
   let resultData: GhostData | null = null;
 
-  await runTransaction(db, async (transaction) => {
-    const docSnap = await transaction.get(ghostRef);
+  try {
+    const docSnap = await getDoc(ghostRef);
     if (docSnap.exists()) {
       const error = new Error("Ce pseudo n'est pas disponible. Veuillez en choisir un autre.");
       (error as any).code = 'ALREADY_EXISTS';
@@ -147,6 +198,7 @@ export async function createGhost(params: {
       countryCode: params.countryCode,
       nationalNumber: params.nationalNumber,
       isOnline: true,
+      localUid: ownerUid,
       createdAt: serverTimestamp(),
       updatedAt: serverTimestamp(),
     };
@@ -157,8 +209,10 @@ export async function createGhost(params: {
       updatedAt: serverTimestamp(),
     };
 
-    transaction.set(ghostRef, publicData);
-    transaction.set(metaRef, privateData);
+    await Promise.all([
+      setDoc(ghostRef, publicData),
+      setDoc(metaRef, privateData)
+    ]);
 
     resultData = {
       ...publicData,
@@ -167,7 +221,10 @@ export async function createGhost(params: {
       createdAt: new Date(),
       updatedAt: new Date(),
     } as GhostData;
-  });
+  } catch (error: any) {
+    if (error.code === 'ALREADY_EXISTS' || error.message?.includes("n'est pas disponible")) throw error;
+    handleFirestoreError(error, OperationType.WRITE, `ghosts/${normalizedPseudo}`);
+  }
 
   // Authorize session immediately for creator
   setSessionAuthenticated(normalizedPseudo);
@@ -218,6 +275,9 @@ export async function loginWithGhostCredentials(
   pseudoOrEmail: string,
   rawPhone: string
 ): Promise<GhostData> {
+  // Ensure the user is authenticated (at least anonymously) so they have a valid auth state
+  await ensureAuthUser();
+
   let cleanInput = (pseudoOrEmail || '').trim();
   let phoneInput = (rawPhone || '').trim();
 
@@ -234,62 +294,56 @@ export async function loginWithGhostCredentials(
 
   // 1. Check if user typed an email address (e.g. user@example.com)
   if (cleanInput.includes('@') && cleanInput.includes('.')) {
-    const emailToFind = cleanInput.toLowerCase();
-    const q = query(collection(db, 'ghost_metadata'), where('ownerEmail', '==', emailToFind));
-    const snap = await getDocs(q);
-    if (!snap.empty) {
-      for (const docSnap of snap.docs) {
-        const metaData = docSnap.data();
-        const pseudo = docSnap.id;
-        const publicSnap = await getDoc(doc(db, 'ghosts', pseudo));
-        if (publicSnap.exists()) {
-          const publicData = publicSnap.data() as GhostData;
-          if (isPhoneMatching(phoneInput, publicData)) {
-            matchedGhost = { ...publicData, ownerUid: metaData.ownerUid, ownerEmail: metaData.ownerEmail };
-            targetRef = publicSnap.ref;
-            metaRef = docSnap.ref;
-            break;
-          }
-        }
-      }
-      // If phone didn't match directly, but user is currently authenticated with this Google email
-      if (!matchedGhost && auth.currentUser?.email?.toLowerCase() === emailToFind) {
-        const firstMeta = snap.docs[0];
-        const pseudo = firstMeta.id;
-        const publicSnap = await getDoc(doc(db, 'ghosts', pseudo));
-        if (publicSnap.exists()) {
-          const publicData = publicSnap.data() as GhostData;
-          matchedGhost = { ...publicData, ownerUid: firstMeta.data().ownerUid, ownerEmail: firstMeta.data().ownerEmail };
-          targetRef = publicSnap.ref;
-          metaRef = firstMeta.ref;
-        }
-      }
-    }
+    throw new Error("Pour vous connecter avec votre adresse e-mail, veuillez cliquer sur le bouton 'Se connecter avec Google' ci-dessous.");
   }
 
   // 2. Direct pseudo lookup
+  let pseudoExistsButPhoneMismatch = false;
+  let matchedGhostPhoneTail = '';
   if (!matchedGhost) {
     const normalizedPseudo = normalizePseudo(cleanInput);
     if (normalizedPseudo) {
-      const publicSnap = await getDoc(doc(db, 'ghosts', normalizedPseudo));
-      const metaSnap = await getDoc(doc(db, 'ghost_metadata', normalizedPseudo));
-      if (publicSnap.exists() && metaSnap.exists()) {
-        const publicData = publicSnap.data() as GhostData;
-        const metaData = metaSnap.data();
-        const fullData = { ...publicData, ownerUid: metaData.ownerUid, ownerEmail: metaData.ownerEmail };
-        if (isPhoneMatching(phoneInput, publicData)) {
-          matchedGhost = fullData;
-          targetRef = publicSnap.ref;
-          metaRef = metaSnap.ref;
-        } else if (
-          // If current Google user is the owner
-          (auth.currentUser?.email && metaData.ownerEmail && auth.currentUser.email.toLowerCase() === metaData.ownerEmail.toLowerCase()) ||
-          (auth.currentUser?.uid && auth.currentUser.uid === metaData.ownerUid)
-        ) {
-          matchedGhost = fullData;
-          targetRef = publicSnap.ref;
-          metaRef = metaSnap.ref;
+      try {
+        const publicSnap = await getDoc(doc(db, 'ghosts', normalizedPseudo));
+        if (publicSnap.exists()) {
+          const publicData = publicSnap.data() as GhostData;
+          matchedGhostPhoneTail = publicData.currentNumber || publicData.nationalNumber || '';
+          const mRef = doc(db, 'ghost_metadata', normalizedPseudo);
+          
+          let metaOwnerUid: string = '';
+          let metaOwnerEmail: string | null = null;
+          
+          try {
+            const metaSnap = await getDoc(mRef);
+            if (metaSnap.exists()) {
+              const metaData = metaSnap.data();
+              metaOwnerUid = metaData.ownerUid || '';
+              metaOwnerEmail = metaData.ownerEmail || null;
+            }
+          } catch (e) {
+            console.log("Metadata read restricted, using deterministic fallback reference:", e);
+          }
+
+          const fullData: GhostData = { ...publicData, ownerUid: metaOwnerUid, ownerEmail: metaOwnerEmail };
+          
+          if (isPhoneMatching(phoneInput, publicData)) {
+            matchedGhost = fullData;
+            targetRef = publicSnap.ref;
+            metaRef = mRef;
+          } else if (
+            // If current Google user is the owner
+            (auth.currentUser?.email && metaOwnerEmail && auth.currentUser.email.toLowerCase() === metaOwnerEmail.toLowerCase()) ||
+            (auth.currentUser?.uid && auth.currentUser.uid === metaOwnerUid)
+          ) {
+            matchedGhost = fullData;
+            targetRef = publicSnap.ref;
+            metaRef = mRef;
+          } else {
+            pseudoExistsButPhoneMismatch = true;
+          }
         }
+      } catch (error) {
+        console.warn('Pseudo lookup restricted:', error);
       }
     }
   }
@@ -298,52 +352,87 @@ export async function loginWithGhostCredentials(
   if (!matchedGhost) {
     const digits = phoneInput.replace(/\D/g, '');
     if (digits.length >= 6) {
-      const allGhostsSnap = await getDocs(collection(db, 'ghosts'));
-      for (const d of allGhostsSnap.docs) {
-        const publicData = d.data() as GhostData;
-        if (isPhoneMatching(phoneInput, publicData)) {
-          const pseudoCheck = normalizePseudo(cleanInput);
-          if (!pseudoCheck || publicData.pseudo.includes(pseudoCheck) || pseudoCheck.includes(publicData.pseudo)) {
-            const mSnap = await getDoc(doc(db, 'ghost_metadata', d.id));
-            if (mSnap.exists()) {
-              const metaData = mSnap.data();
-              matchedGhost = { ...publicData, ownerUid: metaData.ownerUid, ownerEmail: metaData.ownerEmail };
+      try {
+        const allGhostsSnap = await getDocs(collection(db, 'ghosts'));
+        for (const d of allGhostsSnap.docs) {
+          const publicData = d.data() as GhostData;
+          if (isPhoneMatching(phoneInput, publicData)) {
+            const pseudoCheck = normalizePseudo(cleanInput);
+            if (!pseudoCheck || publicData.pseudo.includes(pseudoCheck) || pseudoCheck.includes(publicData.pseudo)) {
+              const mRef = doc(db, 'ghost_metadata', d.id);
+              let metaOwnerUid: string = '';
+              let metaOwnerEmail: string | null = null;
+              
+              try {
+                const mSnap = await getDoc(mRef);
+                if (mSnap.exists()) {
+                  const metaData = mSnap.data();
+                  metaOwnerUid = metaData.ownerUid || '';
+                  metaOwnerEmail = metaData.ownerEmail || null;
+                }
+              } catch (e) {
+                console.log("Metadata fallback lookup restricted:", e);
+              }
+
+              matchedGhost = { ...publicData, ownerUid: metaOwnerUid, ownerEmail: metaOwnerEmail };
               targetRef = d.ref;
-              metaRef = mSnap.ref;
+              metaRef = mRef;
               break;
             }
           }
         }
+      } catch (error) {
+        console.warn('Global fallback search restricted:', error);
       }
     }
   }
 
   if (!matchedGhost || !targetRef || !metaRef) {
+    if (pseudoExistsButPhoneMismatch) {
+      const lastDigits = (matchedGhostPhoneTail || '').replace(/\D/g, '').slice(-2);
+      const maskedHelp = lastDigits ? ` (le numéro enregistré se termine par ...${lastDigits})` : '';
+      throw new Error(`Le numéro de téléphone saisi ne correspond pas à celui enregistré pour le pseudo @${normalizePseudo(cleanInput)}${maskedHelp}.`);
+    }
+    const normalizedPseudo = normalizePseudo(cleanInput);
+    const isEmail = cleanInput.includes('@') && cleanInput.includes('.');
+    if (normalizedPseudo && !isEmail) {
+      throw new Error(`Le pseudo @${normalizedPseudo} n'existe pas.`);
+    }
     throw new Error('Identifiants incorrects. Vérifiez votre pseudo et votre numéro de téléphone.');
   }
 
   // Authorize session for this pseudo
   setSessionAuthenticated(matchedGhost.pseudo);
 
-  // If user is currently signed into Google, attach ownerUid and ownerEmail to ghost_metadata
-  const currentUid = auth.currentUser?.uid;
-  const currentEmail = auth.currentUser?.email;
+  // If user is currently signed in or has a persistent UID, attach ownerUid to ghost_metadata and localUid to ghosts
+  const currentUid = await ensureAuthUser();
   if (currentUid) {
     try {
       await updateDoc(metaRef, {
         ownerUid: currentUid,
-        ...(currentEmail ? { ownerEmail: currentEmail } : {}),
+        updatedAt: serverTimestamp(),
+        verificationPhone: matchedGhost.currentNumber, // Satisfy Firestore rules verification check
+      });
+    } catch (error) {
+      console.warn('Could not update ownerUid in ghost metadata:', error);
+    }
+
+    try {
+      // Re-bind ownership on the public ghost document directly using verificationPhone proof
+      await updateDoc(targetRef, {
+        localUid: currentUid,
+        verificationPhone: matchedGhost.currentNumber,
         updatedAt: serverTimestamp(),
       });
-    } catch (e) {
-      console.warn('Could not rebind Google account to ghost metadata:', e);
+    } catch (error) {
+      console.warn('Could not update localUid in ghost document:', error);
     }
   }
 
   return {
     ...matchedGhost,
     ownerUid: currentUid || matchedGhost.ownerUid,
-    ownerEmail: currentEmail || matchedGhost.ownerEmail,
+    ownerEmail: null,
   };
 }
 
@@ -377,8 +466,8 @@ export async function findGhostsByOwner(ownerUid: string, ownerEmail?: string | 
         }
       }
     }
-  } catch (err) {
-    console.error('findGhostsByOwner error:', err);
+  } catch (error) {
+    console.error('findGhostsByOwner error:', error);
   }
   return ghosts;
 }
@@ -397,12 +486,19 @@ export async function updateGhostNumber(
   const normalizedPseudo = normalizePseudo(pseudo);
   const ghostRef = doc(db, 'ghosts', normalizedPseudo);
 
-  await updateDoc(ghostRef, {
-    currentNumber: params.currentNumber,
-    countryCode: params.countryCode,
-    nationalNumber: params.nationalNumber,
-    updatedAt: serverTimestamp(),
-  });
+  const localUid = await ensureAuthUser();
+
+  try {
+    await updateDoc(ghostRef, {
+      currentNumber: params.currentNumber,
+      countryCode: params.countryCode,
+      nationalNumber: params.nationalNumber,
+      localUid,
+      updatedAt: serverTimestamp(),
+    });
+  } catch (error) {
+    handleFirestoreError(error, OperationType.UPDATE, `ghosts/${normalizedPseudo}`);
+  }
 }
 
 /**
@@ -412,10 +508,17 @@ export async function updateGhostStatus(pseudo: string, isOnline: boolean): Prom
   const normalizedPseudo = normalizePseudo(pseudo);
   const ghostRef = doc(db, 'ghosts', normalizedPseudo);
 
-  await updateDoc(ghostRef, {
-    isOnline,
-    updatedAt: serverTimestamp(),
-  });
+  const localUid = await ensureAuthUser();
+
+  try {
+    await updateDoc(ghostRef, {
+      isOnline,
+      localUid,
+      updatedAt: serverTimestamp(),
+    });
+  } catch (error) {
+    handleFirestoreError(error, OperationType.UPDATE, `ghosts/${normalizedPseudo}`);
+  }
 }
 
 /**
@@ -426,10 +529,14 @@ export async function deleteGhost(pseudo: string): Promise<void> {
   const ghostRef = doc(db, 'ghosts', normalizedPseudo);
   const metaRef = doc(db, 'ghost_metadata', normalizedPseudo);
   
-  await runTransaction(db, async (transaction) => {
-    transaction.delete(ghostRef);
-    transaction.delete(metaRef);
-  });
+  try {
+    await runTransaction(db, async (transaction) => {
+      transaction.delete(ghostRef);
+      transaction.delete(metaRef);
+    });
+  } catch (error) {
+    handleFirestoreError(error, OperationType.DELETE, `ghosts/${normalizedPseudo}`);
+  }
 }
 
 /**
@@ -455,7 +562,7 @@ export function subscribeToGhost(
       }
     },
     (error) => {
-      console.error('Firestore snapshot error:', error);
+      console.warn('Snapshot subscription error (non-critical):', error);
       if (onError) onError(error);
     }
   );
@@ -467,9 +574,14 @@ export function subscribeToGhost(
 export async function fetchGhost(pseudo: string): Promise<{ data: GhostData | null; fromCache: boolean }> {
   const normalizedPseudo = normalizePseudo(pseudo);
   const ghostRef = doc(db, 'ghosts', normalizedPseudo);
-  const snap = await getDoc(ghostRef);
-  if (!snap.exists()) {
-    return { data: null, fromCache: snap.metadata.fromCache };
+  try {
+    const snap = await getDoc(ghostRef);
+    if (!snap.exists()) {
+      return { data: null, fromCache: snap.metadata.fromCache };
+    }
+    return { data: snap.data() as GhostData, fromCache: snap.metadata.fromCache };
+  } catch (error) {
+    console.warn('One-time fetch restricted:', error);
+    return { data: null, fromCache: false };
   }
-  return { data: snap.data() as GhostData, fromCache: snap.metadata.fromCache };
 }

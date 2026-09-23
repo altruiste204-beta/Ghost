@@ -1,10 +1,8 @@
 import { initializeApp, getApps, getApp } from 'firebase/app';
 import { 
   getAuth, 
-  GoogleAuthProvider, 
   signInAnonymously, 
   linkWithPopup, 
-  signInWithPopup,
   onAuthStateChanged,
   type User
 } from 'firebase/auth';
@@ -29,7 +27,6 @@ const firebaseConfig = {
 const app = !getApps().length ? initializeApp(firebaseConfig) : getApp();
 
 const auth = getAuth(app);
-const googleProvider = new GoogleAuthProvider();
 
 // Initialize Firestore with persistent multi-tab offline cache
 let db: Firestore;
@@ -47,10 +44,8 @@ export {
   app, 
   auth, 
   db, 
-  googleProvider, 
   signInAnonymously, 
   linkWithPopup, 
-  signInWithPopup, 
   onAuthStateChanged,
   type User 
 };
